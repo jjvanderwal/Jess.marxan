@@ -1,3 +1,6 @@
+### Functions to write Marxan input files written by JJV
+### Iterative simulations written by CS and JC
+
 # Obtain command line arguments from .sh file
 
 args=(commandArgs(TRUE))
@@ -12,9 +15,7 @@ for(i in 1:length(args))
  
 	}	
 	
-#### Iterative Marxan simulations
-
-### Necessary functions as written by JJV
+#### Iterative Marxan Simulations
 
 ### Function to write things out in binary for linux
 
@@ -120,19 +121,17 @@ create.spec.dat = function() {
 
 ################################################################################
 
-#### Things that need to be command arguments
+#### Adjust command argument xx (number of planning units to investigate per Marxan iteration) to numeric and copy
 
 xx = as.numeric(xx)
 xxorig = xx
-
-#it = '001' # The simulation number, used to create directories
 
 ### Directories and libraries
 
 library(SDMTools)
 
-basedir = '/home/jc152199/Others/JC/BASESIM/'
-indir = paste('/home/jc152199/Others/JC/BASESIM/Investigate',xx,'PU/ReplicateRun',it,'/',sep='')
+basedir = '/home/jc152199/Others/JC/BASEJSIM2/'
+indir = paste('/home/jc152199/Others/JC/BASEJSIM2/Investigate',xx,'PU/ReplicateRun',it,'/',sep='')
 dir.create(indir,recursive=T)
 setwd(indir)
 
@@ -149,6 +148,11 @@ system(paste('chmod +x ./MarOpt_v243_Linux64',sep=''))
 puasc = read.asc(paste(basedir,'dummyasciis/pu2_ascii.asc',sep=''))
 fuasc = read.asc(paste(basedir,'dummyasciis/fu2_ascii.asc',sep=''))
 muasc = read.asc(paste(basedir,'dummyasciis/mu2_ascii.asc',sep=''))
+
+### Create a blank ASCII
+
+baseasc = puasc
+baseasc[,] = NA
 
 ### Create pos and extract data from maps
 
@@ -202,9 +206,7 @@ putf = aggregate(tdata[,'area'],by=list(PU=tdata[,'PU']), FUN=sum)
 names(putf)[2] = 'PUthresh'
 putf$PUthresh = putf$PUthresh/2
 
-### Do the initial Marxan run
-
-### Start by creating directories
+### Create directories
 
 id = paste('input',sprintf('%03i',1),sep=''); dir.create(id)
 od = paste('output',sprintf('%03i',1),sep=''); dir.create(od) 
@@ -217,13 +219,11 @@ twrite2(create.spec.dat(),file.path(id,'/spec.dat'))
 		
 ### Run Marxan
 		
-#system(command=paste('./MarOpt_v243_Linux64 input',sprintf('%03i',1),'.dat -s ',sep=''))
+system(command=paste('./MarOpt_v243_Linux64 input',sprintf('%03i',1),'.dat -s ',sep=''))
 
-### Create the objective table
-### This must be done to meet the condition of the while loop on the first iteration
+### Create objtable
 
-### Updated conservation features/rarity table
-# Remaining objectives to be calculated based on aggregating information in 'status' column in tdata
+# Get summed area per feature unit
 
 objtable = aggregate(tdata[,'area'], by=list(FU=tdata[,'FU']),sum)
 
@@ -242,1485 +242,1609 @@ objtable[,'rarity'] = rarity[match(objtable[,'FU'], rarity$L3_CODE),2]
 # Change summed area heading to more intuitive one
 
 names(objtable)[2] = 'sumarea'
-			
-### Loop through running Marxan multiple times, each subsequent run is based on output of prior run
 
-ii=2
+ii=2 # Controls directory creation, file reading, file writing and file naming
 
 ### Report progress
 
 cat('\nInitial Marxan Run Completed\n')
 
 ### Create a list of PUids which can possibly be investigated
+### Jess search here, this will also have to update when number of PUs increases
 
-pu2i = seq(1:2000)
+pu2i = seq(1:2000) # This is to limit investigations to PUs which haven't yet locked in 50% of their area
 
 ### Begin iteratively running Marxan until all objectives have been met
 
-		while(sum(objtable$remainobj)>0) 
+	while(sum(objtable$remainobj)>0)  # Continue calling Marxan until objective has been met
+	
+		{
+
+		### Report progress
+
+		cat('\nReading In Data From Marxan Iteration ',ii-1,'\n')
+		
+		### Start by creating directories
+
+		id = paste('input',sprintf('%03i',ii),sep=''); dir.create(id)
+		od = paste('output',sprintf('%03i',ii),sep=''); dir.create(od) 
+		
+		### Read in the best solution from the prior Marxan run
+		
+		best = read.csv(paste('output',sprintf('%03i',ii-1),'/rep',sprintf('%03i',ii-1),'_best.csv',sep=''))
+		best = best[which(best$PUID %in% pu2i),]
+		
+		### Read in all solutions
+		
+		ssoln = read.csv(paste('output',sprintf('%03i',ii-1),'/rep',sprintf('%03i',ii-1),'_ssoln.csv',sep=''))
+		
+		# Extract all selected PUs from best solution (SOLUTION == 1)
+		
+		best = subset(best, SOLUTION ==1)
+		
+		# Append selection frequency values
+		
+		best.ssoln = ssoln[which(ssoln$planning_unit %in% best$PUID),]
+		
+		# Merge with best PUs
+		
+		best$ssoln = best.ssoln[match(best$PUID, best.ssoln$planning_unit),2]
+		
+		# Reorder bestdf by ssoln now (highest to lowest) to select top x number of PUs
+		
+		best = best[with(best, order(ssoln,decreasing=TRUE)), ]
+		
+		## Are there fewer planning units selected in the best solution than units to investigate?
+		### If so adjust xx to equal the number of planning units in best solution
+		
+		if(nrow(best)<xxorig){xx=nrow(best);cat('\nNumber of Planning To Investigate Changed To ',xx,'\n',sep='')} else {xx=xxorig}
+		
+		# Select the top 'xx' PU's for investigation
+		
+		investigate = best[1:xx,1]
+		
+		# Read in selection frequency distribution
+
+		freqdist = read.csv(paste(basedir,'PU1_adjusted_tabus_freq_dist.csv',sep=''), header=T)
+
+		# Turn into vector
+
+		vectfreq = as.vector(freqdist[,1])
+
+		# Randomly select value - this is our % conversion target for this PU
+
+		target = sample(vectfreq, 1, replace=F, prob=NULL)
+		target = target*.8
+		
+		### If ii>2, read in the updated objtable from iteration ii-1
+		
+		if(ii>2){load(paste('Objtable_Iteration_',ii-1,'.Rdata',sep=''));objtable = objtable[,-c(2:3)]}
+
+		### Create a dataframe of all MU/PU combinations
+		
+		mupus = data.frame(unique(cbind(tdata[,'MU'],tdata[,'PU'])))
+		names(mupus) = c('MU','PU')
+		
+		### Print
+		
+		cat('\nObjtable Before Investigations Begin\n',sep='')
+		print(objtable)
+		
+		# Loop through planning units from investigate
+		
+		for (inv in investigate) 
 		
 			{
+			
+			### Print out investigate
+			
+			cat('\nUnits To Investigate Are\n',sep='')
+			print(investigate)
+			
+			### Report the unit being investigated
+			
+			cat('\nBegin Investigating Planning Unit ',inv,'\n',sep='')
+			
+			### What is the position of this investigative unit in investigate
+			
+			invpos = which(investigate==inv)
+			
+			### If invpos equals 1, continue with locking units in
+			
+			if(invpos==1)
+			
+			{
 
+			### Save image
+
+			save.image(paste(ii,'_',inv,'_Condition_1.Rdata',sep=''))
+			
 			### Report progress
-
-			cat('\nReading In Data From Marxan Iteration ',ii-1,'\n')
 			
-			### Start by creating directories
-
-			id = paste('input',sprintf('%03i',ii),sep=''); dir.create(id)
-			od = paste('output',sprintf('%03i',ii),sep=''); dir.create(od) 
+			cat('\nInvestigating First Planning Unit\n',sep='')
 			
-			# Read in input files from prior run, do some calculations and then run Marxan again
-	
-			### Read in the best solution 
+			### Subsetting to a single planning unit	
+		
+			puinvest = tdata[which(tdata[,'PU']==inv),]
 			
-			best = read.csv(paste('output',sprintf('%03i',ii-1),'/rep',sprintf('%03i',ii-1),'_best.csv',sep=''))
-			best = best[which(best$PUID %in% pu2i),]
+			### Subset the combinations of MU and PU by this planning unit
 			
-			### Read in all solutions
-			
-			ssoln = read.csv(paste('output',sprintf('%03i',ii-1),'/rep',sprintf('%03i',ii-1),'_ssoln.csv',sep=''))
-			
-			# Extract all selected PUs from best solution (SOLUTION == 1)
-			
-			best = subset(best, SOLUTION ==1)
-			
-			# Append selection frequency values
-			
-			best.ssoln = ssoln[which(ssoln$planning_unit %in% best$PUID),]
-			
-			# Merge with best PUs
-			
-			best$ssoln = best.ssoln[match(best$PUID, best.ssoln$planning_unit),2]
-			
-			# Reorder bestdf by ssoln now (highest to lowest) to select top x number of PUs
-			
-			best = best[with(best, order(ssoln,decreasing=TRUE)), ]
-			
-			## Are there fewer planning units selected in the best solution than units to investigate?
-			### If so adjust xx to equal the number of planning units in best solution
-			
-			if(nrow(best)<xxorig){xx=nrow(best);cat('\nNumber of Planning To Investigate Changed To ',xx,'\n',sep='')} else {xx=xxorig}
-			
-			# Select the top 'xx' PU's for investigation
-			
-			investigate = best[1:xx,1]
-			
-			# Read in selection frequency distribution
-
-    		freqdist = read.csv(paste(basedir,'PU1_adjusted_tabus_freq_dist.csv',sep=''), header=T)
-
-    		# Turn into vector
-
-    		vectfreq = as.vector(freqdist[,1])
-
-    		# Randomly select value - this is our % conversion target for this PU
-
-    		#target = sample(vectfreq, 1, replace=F, prob=NULL)
-			target = 75
-			
-			### Updated conservation features/rarity table
-			# Remaining objectives to be calculated based on aggregating information in 'status' column in tdata
-			
-			objtable = aggregate(tdata[,'area'], by=list(FU=tdata[,'FU']),sum)
-			
-			# Create fixed objective column
-			
-			objtable[,'objarea'] = objtable[,2]*0.3
-			
-			# Objective as percentage
-			
-			objtable[,'remainobj'] = (objtable[,'objarea']/objtable[,'x'])*100
-			
-			# Add rarity values in
-			
-			objtable[,'rarity'] = rarity[match(objtable[,'FU'], rarity$L3_CODE),2]
-
-			# Change summed area heading to more intuitive one
-
-			names(objtable)[2] = 'sumarea'
-			
-			### Create a dataframe of all MU/PU combinations
-			
-			mupus = data.frame(unique(cbind(tdata[,'MU'],tdata[,'PU'])))
-			names(mupus) = c('MU','PU')
-			
-			### Print
-			
-			cat('\nObjtable Before Investigations Begin\n',sep='')
-			print(objtable)
-
-			### Saving image trying to capture all objects when iii=3 before we enter the investigation loop so we can troubleshoot the bugs
-			### Also save the latest version of tdata as another object
-			tdataii3 = tdata
-			if(ii==3){save.image('All3.Rdata')}
-			
-			# Loop through planning units from investigate
-			
-			for (inv in investigate) 
-			
+			tmupu = mupus[which(mupus$PU==inv),]
+		
+			# Now want to summarise this by MU ID and FU ID and area
+		
+			puinvest = aggregate(puinvest[,'area'], by=list(FU=puinvest[,'FU'], MU=puinvest[,'MU'], PU=puinvest[,'PU']),sum)
+		
+			# Now to assess the conservation value of each intersecting MU
+			### To do this, use a loop
+		
+			### Identify unique MU's in 'puinvest'
+		
+			umus = unique(puinvest$MU)
+		
+			### Create a blank object for binding data to
+		
+			out = NULL
+		
+			for (umu in umus)
+		
 				{
 				
-				### Save
+				### Subset to only the management unit 'umu'
 				
-				#save.image('All.Rdata')
+				tpu1 = puinvest[which(puinvest$MU==umu),]
 				
-				### Print out investigate
+				### Get the unique feature units from 'tpu1'
 				
-				cat('\nUnits To Investigate Are\n',sep='')
-				print(investigate)
+				ufus = unique(tpu1$FU)
 				
-				### Report the unit being investigated
-				
-				cat('\nBegin Investigating Planning Unit ',inv,'\n',sep='')
-				
-				### What is the position of this investigative unit in investigate
-				
-				invpos = which(investigate==inv)
-				
-				### Save an image
-				
-				#save.image('All.Rdata')
-				
-				### If invpos equals 1, continue with locking units in
-				
-				if(invpos==1)
-				
-				{
-				
-				### Report progress
-				
-				cat('\nInvestigating First Planning Unit\n',sep='')
-				
-				### Subsetting to a single planning unit	
-			
-				puinvest = tdata[which(tdata[,'PU']==inv),]
-				
-				### Subset the combinations of MU and PU by this planning unit
-				
-				tmupu = mupus[which(mupus$PU==inv),]
-			
-				# Now want to summarise this by MU ID and FU ID and area
-			
-				puinvest = aggregate(puinvest[,'area'], by=list(FU=puinvest[,'FU'], MU=puinvest[,'MU'], PU=puinvest[,'PU']),sum)
-			
-				# Now to assess the conservation value of each intersecting MU
-				### To do this, use a loop
-			
-				### Identify unique MU's in 'puinvest'
-			
-				umus = unique(puinvest$MU)
-			
-				### Create a blank object for binding data to
-			
-				out = NULL
-			
-				for (umu in umus)
-			
+				for (ufu in ufus)
+					
 					{
 					
-					### Subset to only the management unit 'umu'
+					### Subset to a single feature unit
 					
-					tpu1 = puinvest[which(puinvest$MU==umu),]
+					tobj = objtable[which(objtable$FU==ufu),]
 					
-					### Get the unique feature units from 'tpu1'
+					### Do some calculation
 					
-					ufus = unique(tpu1$FU)
+					value = tobj$remainobj * tobj$rarity
 					
-					for (ufu in ufus)
-						
-						{
-						
-						### Subset to a single feature unit
-						
-						tobj = objtable[which(objtable$FU==ufu),]
-						
-						### Do some calculation
-						
-						value = tobj$remainobj * tobj$rarity
-						
-						### Bind this data into a dataframe
-						
-						tout = data.frame(MU=umu,FU=ufu,value=value)
-						
-						### Bind this data to 'out'
-						
-						out = rbind(out,tout)
-						
-						}
+					### Bind this data into a dataframe
+					
+					tout = data.frame(MU=umu,FU=ufu,value=value)
+					
+					### Bind this data to 'out'
+					
+					out = rbind(out,tout)
 					
 					}
-					
-				### Close loop
-		
-				### Aggregate out by summing all values within MU's
-				
-				outag = aggregate(out$value,by=list(MU=out$MU),FUN=sum)
-				
-				### Change a name
-				
-				names(outag)[2] = 'sumvalue'
-
-				### Reorder 'outag' by conservation value
-				
-				outag = outag[rev(order(outag$sumvalue)),]
-				
-				### Print
-				
-				cat('\nOutAg Before Locking In First MU\n',sep='')
-				print(outag)
-				
-				# Take 'highest value' MU (first row in 'outag' object); lock in by changing status to '2' in tdata
-
-				tdata[,'status'][tdata[,'MU']==(outag[1,1])] = 2
-				
-				### Progress
-				
-				cat('\nManagement Unit ',outag[1,1],' Locked In\n',sep='')
-				
-				### Print
-				
-				cat('\nOutAg After Locking In First MU\n',sep='')
-				print(outag)
-				
-				### Update newly locked in MU in 'objtable'
-
-				locktable = aggregate(tdata[,'area'], by=list(FU=tdata[,'FU'], status=tdata[,'status']),sum)
-				names(locktable)[3] = 'lockedarea'
-				
-				### Merge locktable and objtable by FU
-				
-				mergetable = merge(locktable,objtable,by='FU')
-				mergetable$remainobj[which(mergetable$status==2)] = 30-(mergetable$lockedarea[which(mergetable$status==2)]/mergetable$objarea[which(mergetable$status==2)])
-				
-				### Remove FU's from merge table where status is zero, only if they also have some area locked in
-				
-				out2 = NULL
-				
-				for (fu in unique(mergetable$FU))
-				
-					{
-					
-					### Subset
-					
-					tm = mergetable[which(mergetable$FU==fu),]
-					
-					if(nrow(tm)>1){tm = tm[which(tm$status==2),]}
-					
-					out2 = rbind(out2,tm)
-					
-					}
-					
-				objtable = out2
-				
-				cat('\nObjtable With Locked In MUs Updated\n',sep='')
-				print(objtable)
-				
-				### Calculate proportion of managment units locked in
-				### This should be done only for management units intersecting PU inv
-				### However, we then calculate area for these MU's across all PU's
-				
-				### Start by subsetting tdata to only PU 'inv'
-				
-				ttdata = tdata[which(tdata[,'PU']==inv),]
-				
-				### Determine the Managment Units which interest PU 'inv'
-				
-				ttumus = unique(ttdata[,'MU'])
-				
-				### Subset tdata by only the management units in ttumus
-				
-				tttdata = tdata[which(tdata[,'MU'] %in% ttumus),]
-
-				### Now find the sum of the areas for these management units where status is 2
-				
-				numerator = sum(tttdata[,'area'][which(tttdata[,'status']==2)])
-				
-				denominator = putf$PUthresh[which(putf$PU==inv)]*2
-				
-				### Calculate the area that has been 'locked in'
-				
-				currentproplocked = (numerator/denominator)*100
-				
-				### Using a while loop to achieve the target
-				
-				### Create copies of key tables
-				
-				outagorig = outag
-				
-				### Testing line
-				
-				#check = unique(tdata[,'MU'][which(tdata[,'status']==2)])
-				
-				### Print
-				
-				cat('\nNumerator,Denominator, and CPL After Locking In First MU\n',sep='')
-				print(numerator)
-				print(denominator)
-				print(currentproplocked)
-
-				while(currentproplocked<target)
-				
-					{
-					
-					### Remove the 'lockedarea' field from objtable, otherwise it will fuck up the merge inside this while loop
-					
-					objtable = objtable[,-c(2,3)] ############ SEARCH HERE ###########
-					
-					### Identify the management unit with the highest value
-					
-					muhv = outag$MU[1]
-					
-					### Find all the management units which neighbor MUHV
-					
-					m1 = grep(muhv,mubound[,1])
-					m2 = grep(muhv,mubound[,2])
-					mpos = mubound[unique(m1,m2),]
-					neighbors = unique(c(mpos$MUID1,mpos$MUID2))
-					
-					### Print
-					
-					cat('\nAll Neighbors Of MU ',muhv,'\n',sep='')
-					print(neighbors)
-				
-					### Conditional stuff
-					
-					if(length(unique(outag$MU %in% neighbors))==2) # Not all MU's in outag are niehgbors of muhv
-					
-						{
-						
-						cat('\nNot All MUs in Outag Are Neighbors of MUHV\n',sep='')
-					
-						### Eliminate neighbors from outag
-						
-						outag = outag[-which(outag$MU %in% neighbors),]
-						
-						### Print
-						
-						cat('\nOutAg After Neighbors Are Removed\n',sep='')
-						print(outag)
-						
-						# Take 'highest value' MU (first row in 'outag' object); lock in by changing status to '2' in tdata
-
-						tdata[,'status'][tdata[,'MU']==(outag[1,1])] = 2
-						
-						### Report Progress
-						
-						cat('\nManagement Unit ',outag[1,1],' Locked In\n',sep='')
-
-						### Update newly locked in MU in 'objtable'
-
-						locktable = aggregate(tdata[,'area'], by=list(FU=tdata[,'FU'], status=tdata[,'status']),sum)
-						names(locktable)[3] = 'lockedarea'
-						
-						### Merge locktable and objtable by FU
-						
-						mergetable = merge(locktable,objtable,by='FU') ##### COLLIN SEARCH HERE #########
-						mergetable$remainobj[which(mergetable$status==2)] = 30-(mergetable$lockedarea[which(mergetable$status==2)]/mergetable$objarea[which(mergetable$status==2)])
-						
-						### Remove FU's from merge table where status is zero, only if they also have some area locked in
-						
-						out2 = NULL
-						
-						for (fu in unique(mergetable$FU))
-						
-							{
-							
-							### Subset
-							
-							tm = mergetable[which(mergetable$FU==fu),]
-							
-							if(nrow(tm)>1){tm = tm[which(tm$status==2),]}
-							
-							out2 = rbind(out2,tm)
-							
-							}
-							
-						objtable = out2
-						
-						### Print
-						
-						cat('\nObjtable With Locked In MUs Updated\n',sep='')
-						print(objtable)
-				
-						### Calculate proportion of managment units locked in
-						### This should be done only for management units interesting PU inv
-						### However, we then calculate area for these MU's across all PU's
-						
-						### Start by subsetting tdata to only PU 'inv'
-						
-						ttdata = tdata[which(tdata[,'PU']==inv),]
-						
-						### Determine the Managment Units which interest PU 'inv'
-						
-						ttumus = unique(ttdata[,'MU'])
-						
-						### Subset tdata by only the management units in ttumus
-						
-						tttdata = tdata[which(tdata[,'MU'] %in% ttumus),]
-
-						### Now find the sum of the areas for these management units where status is 2
-						
-						numerator = sum(tttdata[,'area'][which(tttdata[,'status']==2)])
-						
-						denominator = putf$PUthresh[which(putf$PU==inv)]*2
-				
-						### Calculate the area that has been 'locked in'
-				
-						currentproplocked = (numerator/denominator)*100
-						
-						cat('\nNumerator,Denominator, and CPL\n',sep='')
-						print(numerator)
-						print(denominator)
-						print(currentproplocked)
-
-						### Print out a counter
-						
-						} else { ### In this instance, the management units in outag are all neighbors
-						
-						### 
-						
-						cat('\nAll MUs in OutAg Are Neighbors of MUHV\n',sep='')
-						
-						### Identify the MU's in tdata which are 'locked in'
-						
-						lockedunits = unique(tdata[,'MU'][which(tdata[,'status']==2)])
-						
-						### Recreate outag, by removing only the lockedunits from outagorig
-						
-						outag = outagorig[-which(outagorig$MU %in% lockedunits),]
-						
-						### Print
-						
-						cat('\nOutAg With All Locked In MUs Removed\n',sep='')
-						print(outag)
-						
-						# Take 'highest value' MU (first row in 'outag' object); lock in by changing status to '2' in tdata
-
-						tdata[,'status'][tdata[,'MU']==(outag[1,1])] = 2
-						
-						### Progress
-						
-						cat('\nManagement Unit ',outag[1,1],' Locked In\n',sep='')
-
-						### Update newly locked in MU in 'objtable'
-
-						locktable = aggregate(tdata[,'area'], by=list(FU=tdata[,'FU'], status=tdata[,'status']),sum)
-						names(locktable)[3] = 'lockedarea'
-						
-						### Merge locktable and objtable by FU
-						
-						mergetable = merge(locktable,objtable,by='FU')
-						mergetable$remainobj[which(mergetable$status==2)] = 30-(mergetable$lockedarea[which(mergetable$status==2)]/mergetable$objarea[which(mergetable$status==2)])
-						
-						### Remove FU's from merge table where status is zero, only if they also have some area locked in
-						
-						out2 = NULL
-						
-						for (fu in unique(mergetable$FU))
-						
-							{
-							
-							### Subset
-							
-							tm = mergetable[which(mergetable$FU==fu),]
-							
-							if(nrow(tm)>1){tm = tm[which(tm$status==2),]}
-							
-							out2 = rbind(out2,tm)
-							
-							}
-							
-						objtable = out2
-						
-						### Print
-						
-						cat('\nObjtable With Locked In MUs Updated\n',sep='')
-						print(objtable)
-						
-						### Calculate proportion of managment units locked in
-						### This should be done only for management units interesting PU inv
-						### However, we then calculate area for these MU's across all PU's
-						
-						### Start by subsetting tdata to only PU 'inv'
-						
-						ttdata = tdata[which(tdata[,'PU']==inv),]
-						
-						### Determine the Managment Units which interest PU 'inv'
-						
-						ttumus = unique(ttdata[,'MU'])
-						
-						### Subset tdata by only the management units in ttumus
-						
-						tttdata = tdata[which(tdata[,'MU'] %in% ttumus),]
-
-						### Now find the sum of the areas for these management units where status is 23
-						
-						numerator = sum(tttdata[,'area'][which(tttdata[,'status']==2)])
-						
-						denominator = putf$PUthresh[which(putf$PU==inv)]*2
-				
-						### Calculate the area that has been 'locked in'
-				
-						currentproplocked = (numerator/denominator)*100
-						
-						### Print out a counter
-						
-						cat('\nNumerator,Denominator, and CPL\n',sep='')
-						print(numerator)
-						print(denominator)
-						print(currentproplocked)
-
-						} # End of else condition
-					
-					}
-					
-				### End of while loop here, i.e. target has been reached for the planning unit 'inv'
-			
-				### Now calculate the area of all PU's which has been locked in as a result of locking in area for the planning unit 'inv'
-				
-				pulock = aggregate(tdata[,'area'][which(tdata[,'status']==2)],by=list(PU=tdata[,'PU'][which(tdata[,'status']==2)],status=tdata[,'status'][which(tdata[,'status']==2)]),FUN=sum)
-				names(pulock)[3] = 'lockedarea'
-				
-				cat('\n Area Locked For PUs\n',sep='')
-				print(pulock)
-				
-				
-				} else if (invpos>1 & (inv %in% pulock$PU)==F) { # 
-				
-				### Report progress
-				
-				cat('\nInvestigating Planning Unit With No Locked In Management Units\n',sep='')
-				
-				### Remove the fields status and locked area from objtable or they will mess up merging later
-				
-				objtable = objtable[,-c(2:3)]
-				
-				### Print
-				
-				cat('\nObjTable Before Locking In New MUs\n',sep='')
-				print(objtable)
-				
-				### Subsetting to a single planning unit	
-			
-				puinvest = tdata[which(tdata[,'PU']==inv),]
-				
-				### Subset the combinations of MU and PU by this planning unit
-				
-				tmupu = mupus[which(mupus$PU==inv),]
-			
-				# Now want to summarise this by MU ID and FU ID and area
-			
-				puinvest = aggregate(puinvest[,'area'], by=list(FU=puinvest[,'FU'], MU=puinvest[,'MU'], PU=puinvest[,'PU']),sum)
-			
-				# Now to assess the conservation value of each intersecting MU
-				### To do this, use a loop
-			
-				### Identify unique MU's in 'puinvest'
-			
-				umus = unique(puinvest$MU)
-			
-				### Create a blank object for binding data to
-			
-				out = NULL
-			
-				for (umu in umus)
-			
-					{
-					
-					### Subset to only the management unit 'umu'
-					
-					tpu1 = puinvest[which(puinvest$MU==umu),]
-					
-					### Get the unique feature units from 'tpu1'
-					
-					ufus = unique(tpu1$FU)
-					
-					### Print some stuff
-					
-					#cat('\numu\n')
-					#print(umu)
-					
-					for (ufu in ufus)
-						
-						{
-						
-						### Subset to a single feature unit
-						
-						tobj = objtable[which(objtable$FU==ufu),]
-						
-						### Do some calculation
-						
-						value = tobj$remainobj * tobj$rarity
-						
-						#save.image('All.Rdata')
-						
-						#cat('\nvalue\n')
-						#print(value)
-					
-						#cat('\nufu\n')
-						#print(ufu)
-					
-						### Bind this data into a dataframe
-						
-						tout = data.frame(MU=umu,FU=ufu,value=value)
-						
-						### Bind this data to 'out'
-						
-						out = rbind(out,tout)
-						
-						}
-					
-					}
-					
-				### Close loop
-		
-				### Aggregate out by summing all values within MU's
-				
-				outag = aggregate(out$value,by=list(MU=out$MU),FUN=sum)
-				
-				### Change a name
-				
-				names(outag)[2] = 'sumvalue'
-
-				### Reorder 'outag' by conservation value
-				
-				outag = outag[rev(order(outag$sumvalue)),]
-				
-				### Print
-				
-				cat('\nOutAg Before New MUs Are Locked In\n',sep='')
-				print(outag)
-				
-				# Take 'highest value' MU (first row in 'outag' object); lock in by changing status to '2' in tdata
-
-				tdata[,'status'][tdata[,'MU']==(outag[1,1])] = 2
-				
-				### Progress
-				
-				cat('\nManagement Unit ',outag[1,1],' Locked In\n',sep='')
-				
-				### Update newly locked in MU in 'objtable'
-
-				locktable = aggregate(tdata[,'area'], by=list(FU=tdata[,'FU'], status=tdata[,'status']),sum)
-				names(locktable)[3] = 'lockedarea'
-				
-				### Merge locktable and objtable by FU
-				
-				mergetable = merge(locktable,objtable,by='FU')
-				mergetable$remainobj[which(mergetable$status==2)] = 30-(mergetable$lockedarea[which(mergetable$status==2)]/mergetable$objarea[which(mergetable$status==2)])
-				
-				### Remove FU's from merge table where status is zero, only if they also have some area locked in
-				
-				out2 = NULL
-				
-				for (fu in unique(mergetable$FU))
-				
-					{
-					
-					### Subset
-					
-					tm = mergetable[which(mergetable$FU==fu),]
-					
-					if(nrow(tm)>1){tm = tm[which(tm$status==2),]}
-					
-					out2 = rbind(out2,tm)
-					
-					}
-					
-				objtable = out2
-				
-				### Print
-				
-				cat('\nObjTable After Locking In MUs\n',sep='')
-				print(objtable)
-				
-				### Calculate proportion of managment units locked in
-				### This should be done only for management units interesting PU inv
-				### However, we then calculate area for these MU's across all PU's
-				
-				### Start by subsetting tdata to only PU 'inv'
-				
-				ttdata = tdata[which(tdata[,'PU']==inv),]
-				
-				### Determine the Managment Units which interest PU 'inv'
-				
-				ttumus = unique(ttdata[,'MU'])
-				
-				### Subset tdata by only the management units in ttumus
-				
-				tttdata = tdata[which(tdata[,'MU'] %in% ttumus),]
-
-				### Now find the sum of the areas for these management units where status is 23
-				
-				numerator = sum(tttdata[,'area'][which(tttdata[,'status']==2)])
-				
-				denominator = putf$PUthresh[which(putf$PU==inv)]*2
-				
-				### Calculate the area that has been 'locked in'
-				
-				currentproplocked = (numerator/denominator)*100
-				
-				cat('\nNumerator,Denominator, and CPL\n',sep='')
-				print(numerator)
-				print(denominator)
-				print(currentproplocked)
-
-				### Using a while loop to achieve the target
-				
-				### Create copies of key tables
-				
-				outagorig = outag
-				
-				### Testing line
-				
-				check = unique(tdata[,'MU'][which(tdata[,'status']==2)])
-
-				while(currentproplocked<target)
-				
-					{
-					
-					### Remove the 'lockedarea' field from objtable, otherwise it will fuck up the merge inside this while loop
-					
-					objtable = objtable[,-c(2,3)] ############ SEARCH HERE ###########
-					
-					### Print
-					
-					cat('\nObjTable Before Locking In Further Units\n',sep='')
-					print(objtable)
-					
-					### Identify the management unit with the highest value
-					
-					muhv = outag$MU[1]
-					
-					### Print
-					
-					cat('\nHighest Value Management Unit\n',sep='')
-					print(muhv)
-					
-					### Find all the management units which neighbor MUHV
-					
-					m1 = grep(muhv,mubound[,1])
-					m2 = grep(muhv,mubound[,2])
-					mpos = mubound[unique(m1,m2),]
-					neighbors = unique(c(mpos$MUID1,mpos$MUID2))
-					
-					### Print
-					
-					cat('\nAll Neighbors of MUHV\n',sep='')
-					print(neighbors)
-				
-					### Conditional stuff
-					
-					if(length(unique(outag$MU %in% neighbors))==2) # Neighboring MU's remain
-					
-						{
-						
-						### Print
-						
-						cat('\nNot All MUs in Outag Are Neighbors of MUHV\n',sep='')
-					
-						### Eliminate neighbors from outag
-						
-						outag = outag[-which(outag$MU %in% neighbors),]
-						
-						### Print
-						
-						cat('\nOutAg After Removing Neighbors\n',sep='')
-						print(outag)
-						
-						# Take 'highest value' MU (first row in 'outag' object); lock in by changing status to '2' in tdata
-
-						tdata[,'status'][tdata[,'MU']==(outag[1,1])] = 2
-						
-						### Progress
-						
-						cat('\nManagement Unit ',outag[1,1],' Locked In\n',sep='')
-
-						### Update newly locked in MU in 'objtable'
-
-						locktable = aggregate(tdata[,'area'], by=list(FU=tdata[,'FU'], status=tdata[,'status']),sum)
-						names(locktable)[3] = 'lockedarea'
-						
-						### Merge locktable and objtable by FU
-						
-						mergetable = merge(locktable,objtable,by='FU')
-						mergetable$remainobj[which(mergetable$status==2)] = 30-(mergetable$lockedarea[which(mergetable$status==2)]/mergetable$objarea[which(mergetable$status==2)])
-						
-						### Remove FU's from merge table where status is zero, only if they also have some area locked in
-						
-						out2 = NULL
-						
-						for (fu in unique(mergetable$FU))
-						
-							{
-							
-							### Subset
-							
-							tm = mergetable[which(mergetable$FU==fu),]
-							
-							if(nrow(tm)>1){tm = tm[which(tm$status==2),]}
-							
-							out2 = rbind(out2,tm)
-							
-							}
-							
-						objtable = out2
-						
-						### Print
-						
-						cat('\nObjTable After Updating MU Status\n',sep='')
-						print(objtable)
-						
-						### Calculate proportion of managment units locked in
-						### This should be done only for management units interesting PU inv
-						### However, we then calculate area for these MU's across all PU's
-						
-						### Start by subsetting tdata to only PU 'inv'
-						
-						ttdata = tdata[which(tdata[,'PU']==inv),]
-						
-						### Determine the Managment Units which interest PU 'inv'
-						
-						ttumus = unique(ttdata[,'MU'])
-						
-						### Subset tdata by only the management units in ttumus
-						
-						tttdata = tdata[which(tdata[,'MU'] %in% ttumus),]
-
-						### Now find the sum of the areas for these management units where status is 23
-						
-						numerator = sum(tttdata[,'area'][which(tttdata[,'status']==2)])
-						
-						denominator = putf$PUthresh[which(putf$PU==inv)]*2
-				
-						### Calculate the area that has been 'locked in'
-				
-						currentproplocked = (numerator/denominator)*100
-						
-						### Print
-						
-						cat('\nNumerator,Denominator, and CPL\n',sep='')
-						print(numerator)
-						print(denominator)
-						print(currentproplocked)
-
-						### Print out a counter
-
-						
-						} else { ### In this instance, the management units in outag are all neighbors
-						
-						cat('\nAll MUs in OutAg Are Neighbors of MUHV\n',sep='')
-						
-						### Identify the MU's in tdata which are 'locked in'
-						
-						lockedunits = unique(tdata[,'MU'][which(tdata[,'status']==2)])
-						
-						### Recreate outag, by removing only the lockedunits from outagorig
-						
-						outag = outagorig[-which(outagorig$MU %in% lockedunits),]
-						
-						### Print
-						
-						cat('\nOutAg With Locked MUs Removed\n',sep='')
-						print(outag)
-						
-						# Take 'highest value' MU (first row in 'outag' object); lock in by changing status to '2' in tdata
-
-						tdata[,'status'][tdata[,'MU']==(outag[1,1])] = 2
-						
-						### Progress
-						
-						cat('\nManagement Unit ',outag[1,1],' Locked In\n',sep='')
-
-						### Update newly locked in MU in 'objtable'
-
-						locktable = aggregate(tdata[,'area'], by=list(FU=tdata[,'FU'], status=tdata[,'status']),sum)
-						names(locktable)[3] = 'lockedarea'
-						
-						### Merge locktable and objtable by FU
-						
-						mergetable = merge(locktable,objtable,by='FU')
-						mergetable$remainobj[which(mergetable$status==2)] = 30-(mergetable$lockedarea[which(mergetable$status==2)]/mergetable$objarea[which(mergetable$status==2)])
-						
-						### Remove FU's from merge table where status is zero, only if they also have some area locked in
-						
-						out2 = NULL
-						
-						for (fu in unique(mergetable$FU))
-						
-							{
-							
-							### Subset
-							
-							tm = mergetable[which(mergetable$FU==fu),]
-							
-							if(nrow(tm)>1){tm = tm[which(tm$status==2),]}
-							
-							out2 = rbind(out2,tm)
-							
-							}
-							
-						objtable = out2
-						
-						### Print
-						
-						cat('\nObjTable After Updating MU Status\n',sep='')
-						print(objtable)
-						
-						### Calculate proportion of managment units locked in
-						### This should be done only for management units interesting PU inv
-						### However, we then calculate area for these MU's across all PU's
-						
-						### Start by subsetting tdata to only PU 'inv'
-						
-						ttdata = tdata[which(tdata[,'PU']==inv),]
-						
-						### Determine the Managment Units which interest PU 'inv'
-						
-						ttumus = unique(ttdata[,'MU'])
-						
-						### Subset tdata by only the management units in ttumus
-						
-						tttdata = tdata[which(tdata[,'MU'] %in% ttumus),]
-
-						### Now find the sum of the areas for these management units where status is 23
-						
-						numerator = sum(tttdata[,'area'][which(tttdata[,'status']==2)])
-						
-						denominator = putf$PUthresh[which(putf$PU==inv)]*2
-				
-						### Calculate the area that has been 'locked in'
-				
-						currentproplocked = (numerator/denominator)*100
-						
-						cat('\nNumerator,Denominator, and CPL\n',sep='')
-						print(numerator)
-						print(denominator)
-						print(currentproplocked)
-
-						} # End of else condition
-					
-					}
-					
-				### End of while loop here, i.e. target has been reached for the planning unit 'inv'
-			
-				### Now calculate the area of all PU's which has been locked in as a result of locking in area for the planning unit 'inv'
-				
-				pulock = aggregate(tdata[,'area'][which(tdata[,'status']==2)],by=list(PU=tdata[,'PU'][which(tdata[,'status']==2)],status=tdata[,'status'][which(tdata[,'status']==2)]),FUN=sum)
-				names(pulock)[3] = 'lockedarea'
-				
-				cat('\n Area Locked For PUs\n',sep='')
-				print(pulock)
-				
-								
-				} else if (invpos>1 & inv%in%pulock$PU) { # The investigative unit already has some area locked in
-				
-				### Report progress
-				
-				cat('\nInvestigating Planning Unit With Some Management Units Already Locked In\n',sep='')
-				
-				tlockedarea = pulock$lockedarea[which(pulock$PU==inv)] # How much area is already locked in this PU?
-				tputhresh = putf$PUthresh[which(putf$PU==inv)]
-				
-				### Remove fields status and locked area from objtable or they will mess up the merge with lock table
-				
-				objtable = objtable[,-c(2:3)]
-				
-				### Print
-				
-				cat('\nObjTable Before Locking In Units\n',sep='')
-				print(objtable)
-				
-				if (tlockedarea<tputhresh) { # Less than 50% of the area of this investigative unit is locked in, proceed as normal
-				
-				#### Report progress
-				
-				cat('\n Less Than Half Of The Planning Unit Has Been Locked In\n',sep='')
-				
-				### Subsetting to a single planning unit	
-			
-				puinvest = tdata[which(tdata[,'PU']==inv),]
-				
-				### Subset the combinations of MU and PU by this planning unit
-				
-				tmupu = mupus[which(mupus$PU==inv),]
-			
-				# Now want to summarise this by MU ID and FU ID and area
-			
-				puinvest = aggregate(puinvest[,'area'], by=list(FU=puinvest[,'FU'], MU=puinvest[,'MU'], PU=puinvest[,'PU']),sum)
-			
-				# Now to assess the conservation value of each intersecting MU
-				### To do this, use a loop
-			
-				### Identify unique MU's in 'puinvest'
-			
-				umus = unique(puinvest$MU)
-			
-				### Create a blank object for binding data to
-			
-				out = NULL
-			
-				for (umu in umus)
-			
-					{
-					
-					### Subset to only the management unit 'umu'
-					
-					tpu1 = puinvest[which(puinvest$MU==umu),]
-					
-					### Get the unique feature units from 'tpu1'
-					
-					ufus = unique(tpu1$FU)
-					
-					for (ufu in ufus)
-						
-						{
-						
-						### Subset to a single feature unit
-						
-						tobj = objtable[which(objtable$FU==ufu),]
-						
-						### Do some calculation
-						
-						value = tobj$remainobj * tobj$rarity
-						
-						### Bind this data into a dataframe
-						
-						tout = data.frame(MU=umu,FU=ufu,value=value)
-						
-						### Bind this data to 'out'
-						
-						out = rbind(out,tout)
-						
-						}
-					
-					}
-					
-				### Close loop
-		
-				### Aggregate out by summing all values within MU's
-				
-				outag = aggregate(out$value,by=list(MU=out$MU),FUN=sum)
-				
-				### Change a name
-				
-				names(outag)[2] = 'sumvalue'
-
-				### Reorder 'outag' by conservation value
-				
-				outag = outag[rev(order(outag$sumvalue)),]
-				
-				### Print
-				
-				cat('\nOutAg Before Locking In MUs\n',sep='')
-				print(outag)
-				
-				# Take 'highest value' MU (first row in 'outag' object); lock in by changing status to '2' in tdata
-
-				tdata[,'status'][tdata[,'MU']==(outag[1,1])] = 2
-				
-				### Progress
-				
-				cat('\nManagement Unit ',outag[1,1],' Locked In\n',sep='')
-				
-				### Update newly locked in MU in 'objtable'
-
-				locktable = aggregate(tdata[,'area'], by=list(FU=tdata[,'FU'], status=tdata[,'status']),sum)
-				names(locktable)[3] = 'lockedarea'
-				
-				### Merge locktable and objtable by FU
-				
-				mergetable = merge(locktable,objtable,by='FU')
-				mergetable$remainobj[which(mergetable$status==2)] = 30-(mergetable$lockedarea[which(mergetable$status==2)]/mergetable$objarea[which(mergetable$status==2)])
-				
-				### Remove FU's from merge table where status is zero, only if they also have some area locked in
-				
-				out2 = NULL
-				
-				for (fu in unique(mergetable$FU))
-				
-					{
-					
-					### Subset
-					
-					tm = mergetable[which(mergetable$FU==fu),]
-					
-					if(nrow(tm)>1){tm = tm[which(tm$status==2),]}
-					
-					out2 = rbind(out2,tm)
-					
-					}
-					
-				objtable = out2
-				
-				### Print
-				
-				cat('\nObjTable After Updating MU Status\n',sep='')
-				print(objtable)
-				
-				### Calculate proportion of managment units locked in
-				### This should be done only for management units interesting PU inv
-				### However, we then calculate area for these MU's across all PU's
-				
-				### Start by subsetting tdata to only PU 'inv'
-				
-				ttdata = tdata[which(tdata[,'PU']==inv),]
-				
-				### Determine the Managment Units which interest PU 'inv'
-				
-				ttumus = unique(ttdata[,'MU'])
-				
-				### Subset tdata by only the management units in ttumus
-				
-				tttdata = tdata[which(tdata[,'MU'] %in% ttumus),]
-
-				### Now find the sum of the areas for these management units where status is 23
-				
-				numerator = sum(tttdata[,'area'][which(tttdata[,'status']==2)])
-				
-				denominator = putf$PUthresh[which(putf$PU==inv)]*2
-				
-				### Calculate the area that has been 'locked in'
-				
-				currentproplocked = (numerator/denominator)*100
-				
-				cat('\nNumerator,Denominator, and CPL\n',sep='')
-				print(numerator)
-				print(denominator)
-				print(currentproplocked)
-				
-				### Using a while loop to achieve the target
-				
-				### Create copies of key tables
-				
-				outagorig = outag
-				
-				### Testing line
-				
-				#check = unique(tdata[,'MU'][which(tdata[,'status']==2)])
-
-				while(currentproplocked<target)
-				
-					{
-					
-					### Remove the 'lockedarea' field from objtable, otherwise it will fuck up the merge inside this while loop
-					
-					objtable = objtable[,-c(2,3)] ############ SEARCH HERE ###########
-					
-					### Print
-					
-					cat('\nObjTable Before Locking In Further MUs\n',sep='')
-					print(objtable)
-					
-					### Identify the management unit with the highest value
-					
-					muhv = outag$MU[1]
-					
-					### Print
-					
-					cat('\nHighest Value Management Unit\n',sep='')
-					print(muhv)
-					
-					### Find all the management units which neighbor MUHV
-					
-					m1 = grep(muhv,mubound[,1])
-					m2 = grep(muhv,mubound[,2])
-					mpos = mubound[unique(m1,m2),]
-					neighbors = unique(c(mpos$MUID1,mpos$MUID2))
-					
-					### Print
-					
-					cat('\nAll Neighbors of MUHV\n',sep='')
-					print(neighbors)
-				
-					### Conditional stuff
-					
-					if(length(unique(outag$MU %in% neighbors))==2)
-					
-						{
-						
-						cat('\nNot All MUs in Outag Are Neighbors of MUHV\n',sep='')
-					
-						### Eliminate neighbors from outag
-						
-						outag = outag[-which(outag$MU %in% neighbors),]
-						
-						### Print
-						
-						cat('\nOutAg After Removing Neighbors\n',sep='')
-						print(outag)
-						
-						# Take 'highest value' MU (first row in 'outag' object); lock in by changing status to '2' in tdata
-
-						tdata[,'status'][tdata[,'MU']==(outag[1,1])] = 2
-						
-						### Progress
-						
-						cat('\nManagement Unit ',outag[1,1],' Locked In\n',sep='')
-
-						### Update newly locked in MU in 'objtable'
-
-						locktable = aggregate(tdata[,'area'], by=list(FU=tdata[,'FU'], status=tdata[,'status']),sum)
-						names(locktable)[3] = 'lockedarea'
-						
-						### Merge locktable and objtable by FU
-						
-						mergetable = merge(locktable,objtable,by='FU')
-						mergetable$remainobj[which(mergetable$status==2)] = 30-(mergetable$lockedarea[which(mergetable$status==2)]/mergetable$objarea[which(mergetable$status==2)])
-						
-						### Remove FU's from merge table where status is zero, only if they also have some area locked in
-						
-						out2 = NULL
-						
-						for (fu in unique(mergetable$FU))
-						
-							{
-							
-							### Subset
-							
-							tm = mergetable[which(mergetable$FU==fu),]
-							
-							if(nrow(tm)>1){tm = tm[which(tm$status==2),]}
-							
-							out2 = rbind(out2,tm)
-							
-							}
-							
-						objtable = out2
-						
-						### Print
-						
-						cat('\nObjTable After Updateing MU Status\n',sep='')
-						print(objtable)
-						
-						### Calculate proportion of managment units locked in
-						### This should be done only for management units interesting PU inv
-						### However, we then calculate area for these MU's across all PU's
-						
-						### Start by subsetting tdata to only PU 'inv'
-						
-						ttdata = tdata[which(tdata[,'PU']==inv),]
-						
-						### Determine the Managment Units which interest PU 'inv'
-						
-						ttumus = unique(ttdata[,'MU'])
-						
-						### Subset tdata by only the management units in ttumus
-						
-						tttdata = tdata[which(tdata[,'MU'] %in% ttumus),]
-
-						### Now find the sum of the areas for these management units where status is 23
-						
-						numerator = sum(tttdata[,'area'][which(tttdata[,'status']==2)])
-						
-						denominator = putf$PUthresh[which(putf$PU==inv)]*2
-				
-						### Calculate the area that has been 'locked in'
-				
-						currentproplocked = (numerator/denominator)*100
-						
-						cat('\nNumerator,Denominator, and CPL\n',sep='')
-						print(numerator)
-						print(denominator)
-						print(currentproplocked)
-
-						} else { ### In this instance, the management units in outag are all neighbors
-						
-						cat('\nAll MUs in OutAg Are Neighbors of MUHV\n',sep='')
-						
-						### Identify the MU's in tdata which are 'locked in'
-						
-						lockedunits = unique(tdata[,'MU'][which(tdata[,'status']==2)])
-						
-						### Recreate outag, by removing only the lockedunits from outagorig
-						
-						outag = outagorig[-which(outagorig$MU %in% lockedunits),]
-						
-						### Print
-						
-						cat('\nOutAg After Removing Locked Units\n',sep='')
-						print(outag)
-						
-						# Take 'highest value' MU (first row in 'outag' object); lock in by changing status to '2' in tdata
-
-						tdata[,'status'][tdata[,'MU']==(outag[1,1])] = 2
-						
-						### Progress
-						
-						cat('\nManagement Unit ',outag[1,1],' Locked In\n',sep='')
-
-						### Update newly locked in MU in 'objtable'
-
-						locktable = aggregate(tdata[,'area'], by=list(FU=tdata[,'FU'], status=tdata[,'status']),sum)
-						names(locktable)[3] = 'lockedarea'
-						
-						### Merge locktable and objtable by FU
-						
-						mergetable = merge(locktable,objtable,by='FU')
-						mergetable$remainobj[which(mergetable$status==2)] = 30-(mergetable$lockedarea[which(mergetable$status==2)]/mergetable$objarea[which(mergetable$status==2)])
-						
-						### Remove FU's from merge table where status is zero, only if they also have some area locked in
-						
-						out2 = NULL
-						
-						for (fu in unique(mergetable$FU))
-						
-							{
-							
-							### Subset
-							
-							tm = mergetable[which(mergetable$FU==fu),]
-							
-							if(nrow(tm)>1){tm = tm[which(tm$status==2),]}
-							
-							out2 = rbind(out2,tm)
-							
-							}
-							
-						objtable = out2
-						
-						### Print
-						
-						cat('\nObjTable After Updating MU Status\n',sep='')
-						print(objtable)
-						
-						### Calculate proportion of managment units locked in
-						### This should be done only for management units interesting PU inv
-						### However, we then calculate area for these MU's across all PU's
-						
-						### Start by subsetting tdata to only PU 'inv'
-						
-						ttdata = tdata[which(tdata[,'PU']==inv),]
-						
-						### Determine the Managment Units which interest PU 'inv'
-						
-						ttumus = unique(ttdata[,'MU'])
-						
-						### Subset tdata by only the management units in ttumus
-						
-						tttdata = tdata[which(tdata[,'MU'] %in% ttumus),]
-
-						### Now find the sum of the areas for these management units where status is 23
-						
-						numerator = sum(tttdata[,'area'][which(tttdata[,'status']==2)])
-						
-						denominator = putf$PUthresh[which(putf$PU==inv)]*2
-				
-						### Calculate the area that has been 'locked in'
-				
-						currentproplocked = (numerator/denominator)*100
-						
-						cat('\nNumerator,Denominator, and CPL\n',sep='')
-						print(numerator)
-						print(denominator)
-						print(currentproplocked)
-						
-						} # End of else condition
-					
-					}
-					
-				### End of while loop here, i.e. target has been reached for the planning unit 'inv'
-			
-				### Now calculate the area of all PU's which has been locked in as a result of locking in area for the planning unit 'inv'
-				
-				pulock = aggregate(tdata[,'area'][which(tdata[,'status']==2)],by=list(PU=tdata[,'PU'][which(tdata[,'status']==2)],status=tdata[,'status'][which(tdata[,'status']==2)]),FUN=sum)
-				names(pulock)[3] = 'lockedarea'
-				
-				### Print
-				
-				cat('\n Area Locked For PUs\n',sep='')
-				print(pulock)
-				
-				} else { # More than 50% of this planning unit has been 'locked in'
-				
-				### Report progress
-				
-				cat('\nMore Than 50% Of This Planning Unit Is Locked In\n',sep='')
-				
-				### Identify the PU's which neighbor 'inv'
-					
-				p1 = grep(inv,pubound[,1])
-				p2 = grep(inv,pubound[,2])
-				ppos = pubound[unique(p1,p2),]
-				pneighbors = unique(c(ppos$PUID1,ppos$PUID2))
-				pneighbors = pneighbors[-which(pneighbors==inv)]
-				
-				### Print
-				
-				cat('\nNeighboring Planning Units\n',sep='')
-				print(pneighbors)
-				
-				### Find the neighbor which shares the longest boundary with 'inv'
-				
-				pnout = NULL
-				
-				for (nn in pneighbors)
-				
-					{
-					
-					tbound = pubound$boundary[which(pubound[,1]==nn & pubound[,2]==inv)]
-					tpnout = data.frame(PUID=nn,bound=tbound)
-					pnout = rbind(tpnout,pnout)
-					
-					}
-					
-				### Identify the Planning Unit with the longest shared boundary with 'inv'
-				
-				NPUID = pnout$PUID[which(pnout$bound==max(pnout$bound))]
-				
-				### Print
-				
-				cat('\nUpdating PU ',inv,' To ',NPUID,'\n',sep='')
-				
-				### Update the Planning Unit 'inv' to NPUID in the table tdata
-				
-				tdata[,'PU'][which(tdata[,'PU']==inv)]=NPUID
-				
-				### Now recalculate the locked in area for all planning units
-				
-				pulock = aggregate(tdata[,'area'][which(tdata[,'status']==2)],by=list(PU=tdata[,'PU'][which(tdata[,'status']==2)],status=tdata[,'status'][which(tdata[,'status']==2)]),FUN=sum)
-				names(pulock)[3] = 'lockedarea'
-				
-				cat('\n Area Locked For PUs\n',sep='')
-				print(pulock)
-				
-			
-				### Adjust the threshold area for all PUs
-
-				### Create a table of thresholds based on planning unit size
-
-				putf = aggregate(tdata[,'area'],by=list(PU=tdata[,'PU']), FUN=sum)
-				names(putf)[2] = 'PUthresh'
-				putf$PUthresh = putf$PUthresh/2	
-
-				### Adjust the neighbors table 'pubound', by updated planning unit 'inv' to NPUID
-				
-				pubound$PUID1[which(pubound$PUID1==inv)] = NPUID
-				pubound$PUID2[which(pubound$PUID1==inv)] = NPUID
-				
-				### Adjust the table 'mupus', unique  by updated planning unit 'inv' to NPUID
-				
-				mupus$PU[which(mupus$PU==inv)] = NPUID
-				
-				### Here we need to recalculate boundary lengths
-				
 				
 				}
 				
-				} 
-				
-			cat('\nFinished Investigating Planning Unit ',inv,'\n',sep='')
+			### Close loop
+	
+			### Aggregate out by summing all values within MU's
 			
+			outag = aggregate(out$value,by=list(MU=out$MU),FUN=sum)
+			
+			### Change a name
+			
+			names(outag)[2] = 'sumvalue'
+
+			### Reorder 'outag' by conservation value
+			
+			outag = outag[rev(order(outag$sumvalue)),]
+			
+			### Create a copy of outag
+			
+			outagorig = outag
+
+			### Print
+			
+			cat('\nOutAg Before Locking In First MU\n',sep='')
+			print(outag)
+			
+			# Take 'highest value' MU (first row in 'outag' object); lock in by changing status to '2' in tdata
+
+			tdata[,'status'][tdata[,'MU']==(outag[1,1])] = 2
+			
+			### Progress
+			
+			cat('\nManagement Unit ',outag[1,1],' Locked In\n',sep='')
+			
+			### Print
+			
+			cat('\nOutAg After Locking In First MU\n',sep='')
+			print(outag)
+			
+			### Update newly locked in MU in 'objtable'
+
+			locktable = aggregate(tdata[,'area'], by=list(FU=tdata[,'FU'], status=tdata[,'status']),sum)
+			names(locktable)[3] = 'lockedarea'
+			
+			### Merge locktable and objtable by FU
+			
+			mergetable = merge(locktable,objtable,by='FU')
+			
+			### Adjust the remaining objectives
+			
+			mergetable$remainobj = mergetable$remainobj - ((mergetable$lockedarea/mergetable$objarea)*mergetable$remainobj)
+
+			### Recalculate objtable, use a loop
+			### Remove FU's from merge table where status is zero if they also have some area locked in
+			
+			out2 = NULL
+			
+			for (fu in unique(mergetable$FU))
+			
+				{
+				
+				### Subset
+				
+				tm = mergetable[which(mergetable$FU==fu),]
+				
+				if(nrow(tm)>1){tm = tm[which(tm$status==2),]}
+				
+				out2 = rbind(out2,tm)
+				
+				}
+				
+			objtable = out2
+			
+			cat('\nObjtable With Locked In MUs Updated\n',sep='')
+			print(objtable)
+			
+			### Calculate proportion of managment units locked in
+			### This should be done only for management units intersecting PU inv
+			### However, we then calculate area for these MU's across all PU's
+			
+			### Start by subsetting tdata to only PU 'inv'
+			
+			ttdata = tdata[which(tdata[,'PU']==inv),]
+			
+			### Determine the Managment Units which interest PU 'inv'
+			
+			ttumus = unique(ttdata[,'MU'])
+			
+			### Subset tdata by only the management units in ttumus
+			
+			tttdata = tdata[which(tdata[,'MU'] %in% ttumus),]
+
+			### Now find the sum of the areas for these management units where status is 2
+			
+			numerator = sum(tttdata[,'area'][which(tttdata[,'status']==2)])
+			
+			denominator = putf$PUthresh[which(putf$PU==inv)]*2
+			
+			### Calculate the area that has been 'locked in'
+			
+			currentproplocked = (numerator/denominator)*100
+	
+			### Print
+			
+			cat('\nNumerator,Denominator, and CPL After Locking In First MU\n',sep='')
+			print(numerator)
+			print(denominator)
+			print(currentproplocked)
+			
+			### Iterate, repeating until target is met
+		
+			while(currentproplocked<target)
+			
+				{
+				
+				### Clean up objtable
+				
+				objtable = objtable[,-c(2,3)] 
+				
+				### Identify the management unit with the highest value
+
+				muhv = outag$MU[1]
+
+				### Find all the management units which neighbor MUHV
+				# Use this search function to search the original mubound file for those neighbouring MUHV
+
+				sfun = function(MUID1,muhv){muhv %in% MUID1}
+
+				# Logically tests the search function on every row in mubound
+
+				mpos = apply(cbind(mubound),1,sfun,muhv)
+
+				# The MUs which neighbour muhv
+
+				neighbors = unique(c(mubound$MUID1[which(mpos==TRUE)], mubound$MUID2[which(mpos==TRUE)]))
+							
+				### Print
+				
+				cat('\nAll Neighbors Of MU ',muhv,'\n',sep='')
+				print(neighbors)
+			
+				# Not all MU's in outag are neighbors of 'muhv'
+				
+				if(length(unique(outag$MU %in% neighbors))==2) 
+				
+					{
+					
+					cat('\nNot All MUs in Outag Are Neighbors of MUHV\n',sep='')
+				
+					### Eliminate neighbors from outag
+					
+					outag = outag[-which(outag$MU %in% neighbors),]
+					
+					### Print
+					
+					cat('\nOutAg After Neighbors Are Removed\n',sep='')
+					print(outag)
+					
+					# Take 'highest value' MU (first row in 'outag' object); lock in by changing status to '2' in tdata
+
+					tdata[,'status'][tdata[,'MU']==(outag[1,1])] = 2
+					
+					### Report Progress
+					
+					cat('\nManagement Unit ',outag[1,1],' Locked In\n',sep='')
+
+					### Update newly locked in MU in 'objtable'
+
+					locktable = aggregate(tdata[,'area'], by=list(FU=tdata[,'FU'], status=tdata[,'status']),sum)
+					names(locktable)[3] = 'lockedarea'
+					
+					### Merge locktable and objtable by FU
+					
+					mergetable = merge(locktable,objtable,by='FU')
+					
+					### Update remaining objectives
+					
+					mergetable$remainobj = mergetable$remainobj - ((mergetable$lockedarea/mergetable$objarea)*mergetable$remainobj)
+
+					### Update objective table using a loop
+					### Remove FU's from merge table where status is zero, only if they also have some area locked in
+					
+					out2 = NULL
+					
+					for (fu in unique(mergetable$FU))
+					
+						{
+						
+						### Subset
+						
+						tm = mergetable[which(mergetable$FU==fu),]
+						
+						if(nrow(tm)>1){tm = tm[which(tm$status==2),]}
+						
+						out2 = rbind(out2,tm)
+						
+						}
+						
+					objtable = out2
+					
+					### Print
+					
+					cat('\nObjtable With Locked In MUs Updated\n',sep='')
+					print(objtable)
+			
+					### Calculate proportion of managment units locked in
+					### This should be done only for management units interesting PU inv
+					### However, we then calculate area for these MU's across all PU's
+					
+					### Start by subsetting tdata to only PU 'inv'
+					
+					ttdata = tdata[which(tdata[,'PU']==inv),]
+					
+					### Determine the Managment Units which interest PU 'inv'
+					
+					ttumus = unique(ttdata[,'MU'])
+					
+					### Subset tdata by only the management units in ttumus
+					
+					tttdata = tdata[which(tdata[,'MU'] %in% ttumus),]
+
+					### Now find the sum of the areas for these management units where status is 2
+					
+					numerator = sum(tttdata[,'area'][which(tttdata[,'status']==2)])
+					
+					denominator = putf$PUthresh[which(putf$PU==inv)]*2
+			
+					### Calculate the area that has been 'locked in'
+			
+					currentproplocked = (numerator/denominator)*100
+					
+					### Progress and print
+					
+					cat('\nNumerator,Denominator, and CPL\n',sep='')
+					print(numerator)
+					print(denominator)
+					print(currentproplocked)
+					
+					} else { ### In this instance, the management units in outag are all neighbors
+					
+					### Progress
+					
+					cat('\nRemaining MU Options Are All Found In Neighbors\n',sep='')
+					
+					### Identify the MU's in tdata which are 'locked in'
+					
+					lockedunits = unique(tdata[,'MU'][which(tdata[,'status']==2)])
+
+					### A list of all MUs in 'outagorig' (original copy of outag before any changes were made)
+
+					outagmus = unique(outagorig$MU)
+
+					### Check if all unique 'outagmus' are found in 'lockedunits'
+
+					check = outagmus %in% lockedunits
+
+					### What are the unique logical values from 'check'
+
+					ucheck = unique(check)
+
+					### Logical test to determine if all MUs in 'outagorig' have already been locked in at same stage
+					### If so, we need to stop and break out of this loop and jump to the next PU of investigation (i.e., next 'inv')
+					### If we do not do this, the simulations will break because we will have no possible MU options left to lock in
+					### In other words, the whole planning unit has been converted and we need to MOVE ON
+
+					if(length(ucheck)==2){cat('Continue Locking in MUs As Normal For This Condition')} else if (length(ucheck)==1 & ucheck==F) {cat('Continue Locking in MUs As Normal For This Condition')} else {cat('Break Out Back To Top Level Of Investigate Loop');break}
+
+					### If we pass either of the first two logical tests in the 'if' statement above, proceed locking in MUs as normal
+					### Recreate outag, by removing only the lockedunits from outagorig
+					
+					outag = outagorig[-which(outagorig$MU %in% lockedunits),]
+					
+					### Print
+					
+					cat('\nOutAg With All Locked In MUs Removed\n',sep='')
+					print(outag)
+					
+					# Take 'highest value' MU (first row in 'outag' object); lock in by changing status to '2' in tdata
+
+					tdata[,'status'][tdata[,'MU']==(outag[1,1])] = 2
+					
+					### Progress
+					
+					cat('\nManagement Unit ',outag[1,1],' Locked In\n',sep='')
+
+					### Update newly locked in MU in 'objtable'
+
+					locktable = aggregate(tdata[,'area'], by=list(FU=tdata[,'FU'], status=tdata[,'status']),sum)
+					names(locktable)[3] = 'lockedarea'
+					
+					### Merge locktable and objtable by FU
+					
+					mergetable = merge(locktable,objtable,by='FU')
+					
+					### Update remaining objectives
+					
+					mergetable$remainobj = mergetable$remainobj - ((mergetable$lockedarea/mergetable$objarea)*mergetable$remainobj)
+					
+					### Update objtable using a loop
+					### Remove FU's from merge table where status is zero, only if they also have some area locked in
+					
+					out2 = NULL
+					
+					for (fu in unique(mergetable$FU))
+					
+						{
+						
+						### Subset
+						
+						tm = mergetable[which(mergetable$FU==fu),]
+						
+						if(nrow(tm)>1){tm = tm[which(tm$status==2),]}
+						
+						out2 = rbind(out2,tm)
+						
+						}
+						
+					objtable = out2
+					
+					### Print
+					
+					cat('\nObjtable With Locked In MUs Updated\n',sep='')
+					print(objtable)
+					
+					### Calculate proportion of managment units locked in
+					### This should be done only for management units interesting PU inv
+					### However, we then calculate area for these MU's across all PU's
+					
+					### Start by subsetting tdata to only PU 'inv'
+					
+					ttdata = tdata[which(tdata[,'PU']==inv),]
+					
+					### Determine the Managment Units which interest PU 'inv'
+					
+					ttumus = unique(ttdata[,'MU'])
+					
+					### Subset tdata by only the management units in ttumus
+					
+					tttdata = tdata[which(tdata[,'MU'] %in% ttumus),]
+
+					### Now find the sum of the areas for these management units where status is 23
+					
+					numerator = sum(tttdata[,'area'][which(tttdata[,'status']==2)])
+					
+					denominator = putf$PUthresh[which(putf$PU==inv)]*2
+			
+					### Calculate the area that has been 'locked in'
+			
+					currentproplocked = (numerator/denominator)*100
+					
+					### Print out a counter
+					
+					cat('\nNumerator,Denominator, and CPL\n',sep='')
+					print(numerator)
+					print(denominator)
+					print(currentproplocked)
+
+					} # End of else condition
+				
+				}
+				
+			### End of while loop here, i.e. target has been reached for the planning unit 'inv'
+		
+			### Now calculate the area of all PU's which has been locked in as a result of locking in area for the planning unit 'inv'
+			
+			pulock = aggregate(tdata[,'area'][which(tdata[,'status']==2)],by=list(PU=tdata[,'PU'][which(tdata[,'status']==2)],status=tdata[,'status'][which(tdata[,'status']==2)]),FUN=sum)
+			names(pulock)[3] = 'lockedarea'
+			
+			### Progress & print
+			
+			cat('\n Area Locked For PUs\n',sep='')
+			print(pulock)
+			
+			### Next condition for investigate loop 
+			
+			} else if (invpos>1 & (inv %in% pulock$PU)==F) { 
+
+			### Save image
+
+			save.image(paste(ii,'_',inv,'_Condition_2.Rdata',sep=''))
+			
+			### Report progress
+			
+			cat('\nInvestigating Planning Unit With No Locked In Management Units\n',sep='')
+			
+			### Remove the fields status and locked area from objtable or they will mess up merging later
+			### HOWEVER, in this condition, we need to account for the possibility that we have previously broken out of the while loop as a result of locking in all MUs in the PU
+			### In which case, objtable at this point does NOT have the usual 7 columns (there was no last merge)
+			### We use an If test: only if length of number of columns of 'objtable' is 7, we remove columns 2 and 3, otherwise, nothing happens
+
+			if(ncol(objtable)==7){objtable = objtable[,-c(2:3)]}
+			
+			### Print
+			
+			cat('\nObjTable Before Locking In New MUs\n',sep='')
+			print(objtable)
+			
+			### Subsetting to a single planning unit	
+		
+			puinvest = tdata[which(tdata[,'PU']==inv),]
+			
+			### Subset the combinations of MU and PU by this planning unit
+			
+			tmupu = mupus[which(mupus$PU==inv),]
+		
+			# Now want to summarise this by MU ID and FU ID and area
+		
+			puinvest = aggregate(puinvest[,'area'], by=list(FU=puinvest[,'FU'], MU=puinvest[,'MU'], PU=puinvest[,'PU']),sum)
+		
+			# Now to assess the conservation value of each intersecting MU
+			### To do this, use a loop
+		
+			### Identify unique MU's in 'puinvest'
+		
+			umus = unique(puinvest$MU)
+		
+			### Create a blank object for binding data to
+		
+			out = NULL
+		
+			for (umu in umus)
+		
+				{
+				
+				### Subset to only the management unit 'umu'
+				
+				tpu1 = puinvest[which(puinvest$MU==umu),]
+				
+				### Get the unique feature units from 'tpu1'
+				
+				ufus = unique(tpu1$FU)
+				
+				for (ufu in ufus)
+					
+					{
+					
+					### Subset to a single feature unit
+					
+					tobj = objtable[which(objtable$FU==ufu),]
+					
+					### Do some calculation
+					
+					value = tobj$remainobj * tobj$rarity
+				
+					### Bind this data into a dataframe
+					
+					tout = data.frame(MU=umu,FU=ufu,value=value)
+					
+					### Bind this data to 'out'
+					
+					out = rbind(out,tout)
+					
+					}
+				
+				}
+				
+			### Close loop
+	
+			### Aggregate out by summing all values within MU's
+			
+			outag = aggregate(out$value,by=list(MU=out$MU),FUN=sum)
+			
+			### Change a name
+			
+			names(outag)[2] = 'sumvalue'
+
+			### Reorder 'outag' by conservation value
+			
+			outag = outag[rev(order(outag$sumvalue)),]
+
+			### Copy outag
+			
+			outagorig = outag
+			
+			### Print
+			
+			cat('\nOutAg Before New MUs Are Locked In\n',sep='')
+			print(outag)
+			
+			# Take 'highest value' MU (first row in 'outag' object); lock in by changing status to '2' in tdata
+
+			tdata[,'status'][tdata[,'MU']==(outag[1,1])] = 2
+			
+			### Progress
+			
+			cat('\nManagement Unit ',outag[1,1],' Locked In\n',sep='')
+			
+			### Update newly locked in MU in 'objtable'
+
+			locktable = aggregate(tdata[,'area'], by=list(FU=tdata[,'FU'], status=tdata[,'status']),sum)
+			names(locktable)[3] = 'lockedarea'
+			
+			### Merge locktable and objtable by FU
+			
+			mergetable = merge(locktable,objtable,by='FU')
+			
+			### Update remainiing objectives
+			
+			mergetable$remainobj = mergetable$remainobj - ((mergetable$lockedarea/mergetable$objarea)*mergetable$remainobj)
+			
+			### Update objtable using a loop
+			### Remove FU's from merge table where status is zero, only if they also have some area locked in
+			
+			out2 = NULL
+			
+			for (fu in unique(mergetable$FU))
+			
+				{
+				
+				### Subset
+				
+				tm = mergetable[which(mergetable$FU==fu),]
+				
+				if(nrow(tm)>1){tm = tm[which(tm$status==2),]}
+				
+				out2 = rbind(out2,tm)
+				
+				}
+				
+			objtable = out2
+			
+			### Print
+			
+			cat('\nObjTable After Locking In MUs\n',sep='')
+			print(objtable)
+			
+			### Calculate proportion of managment units locked in
+			### This should be done only for management units interesting PU inv
+			### However, we then calculate area for these MU's across all PU's
+			
+			### Start by subsetting tdata to only PU 'inv'
+			
+			ttdata = tdata[which(tdata[,'PU']==inv),]
+			
+			### Determine the Managment Units which interest PU 'inv'
+			
+			ttumus = unique(ttdata[,'MU'])
+			
+			### Subset tdata by only the management units in ttumus
+			
+			tttdata = tdata[which(tdata[,'MU'] %in% ttumus),]
+
+			### Now find the sum of the areas for these management units where status is 23
+			
+			numerator = sum(tttdata[,'area'][which(tttdata[,'status']==2)])
+			
+			denominator = putf$PUthresh[which(putf$PU==inv)]*2
+			
+			### Calculate the area that has been 'locked in'
+			
+			currentproplocked = (numerator/denominator)*100
+			
+			### Print
+			
+			cat('\nNumerator,Denominator, and CPL\n',sep='')
+			print(numerator)
+			print(denominator)
+			print(currentproplocked)
+
+			### Iterate until target met
+			
+			while(currentproplocked<target)
+			
+				{
+				
+				### Clean objtable
+				
+				objtable = objtable[,-c(2,3)]
+				
+				### Print
+				
+				cat('\nObjTable Before Locking In Further Units\n',sep='')
+				print(objtable)
+				
+				### Identify the management unit with the highest value
+
+				muhv = outag$MU[1]
+
+				### Print
+				
+				cat('\nHighest Value Management Unit\n',sep='')
+				print(muhv)
+
+				### Find all the management units which neighbor MUHV
+				# Use this search function to search the original mubound file for those neighbouring MUHV
+
+				sfun = function(MUID1,muhv){muhv %in% MUID1}
+
+				# Logically tests the search function on every row in mubound
+
+				mpos = apply(cbind(mubound),1,sfun,muhv)
+
+				# The MUs which neighbour muhv
+
+				neighbors = unique(c(mubound$MUID1[which(mpos==TRUE)], mubound$MUID2[which(mpos==TRUE)]))
+				
+				### Print
+				
+				cat('\nAll Neighbors of MUHV\n',sep='')
+				print(neighbors)
+			
+				# Neighboring MU's remain
+				
+				if(length(unique(outag$MU %in% neighbors))==2) 
+				
+					{
+					
+					### Print
+					
+					cat('\nNot All MUs in Outag Are Neighbors of MUHV\n',sep='')
+				
+					### Eliminate neighbors from outag
+					
+					outag = outag[-which(outag$MU %in% neighbors),]
+					
+					### Print
+					
+					cat('\nOutAg After Removing Neighbors\n',sep='')
+					print(outag)
+					
+					# Take 'highest value' MU (first row in 'outag' object); lock in by changing status to '2' in tdata
+
+					tdata[,'status'][tdata[,'MU']==(outag[1,1])] = 2
+					
+					### Progress
+					
+					cat('\nManagement Unit ',outag[1,1],' Locked In\n',sep='')
+
+					### Update newly locked in MU in 'objtable'
+
+					locktable = aggregate(tdata[,'area'], by=list(FU=tdata[,'FU'], status=tdata[,'status']),sum)
+					names(locktable)[3] = 'lockedarea'
+					
+					### Merge locktable and objtable by FU
+					
+					mergetable = merge(locktable,objtable,by='FU')
+					
+					### Update remaining objectives
+					
+					mergetable$remainobj = mergetable$remainobj - ((mergetable$lockedarea/mergetable$objarea)*mergetable$remainobj)
+					
+					### Update objtable using a for loop
+					### Remove FU's from merge table where status is zero, only if they also have some area locked in
+					
+					out2 = NULL
+					
+					for (fu in unique(mergetable$FU))
+					
+						{
+						
+						### Subset
+						
+						tm = mergetable[which(mergetable$FU==fu),]
+						
+						if(nrow(tm)>1){tm = tm[which(tm$status==2),]}
+						
+						out2 = rbind(out2,tm)
+						
+						}
+						
+					objtable = out2
+					
+					### Print
+					
+					cat('\nObjTable After Updating MU Status\n',sep='')
+					print(objtable)
+					
+					### Calculate proportion of managment units locked in
+					### This should be done only for management units interesting PU inv
+					### However, we then calculate area for these MU's across all PU's
+					
+					### Start by subsetting tdata to only PU 'inv'
+					
+					ttdata = tdata[which(tdata[,'PU']==inv),]
+					
+					### Determine the Managment Units which interest PU 'inv'
+					
+					ttumus = unique(ttdata[,'MU'])
+					
+					### Subset tdata by only the management units in ttumus
+					
+					tttdata = tdata[which(tdata[,'MU'] %in% ttumus),]
+
+					### Now find the sum of the areas for these management units where status is 23
+					
+					numerator = sum(tttdata[,'area'][which(tttdata[,'status']==2)])
+					
+					denominator = putf$PUthresh[which(putf$PU==inv)]*2
+			
+					### Calculate the area that has been 'locked in'
+			
+					currentproplocked = (numerator/denominator)*100
+					
+					### Print
+					
+					cat('\nNumerator,Denominator, and CPL\n',sep='')
+					print(numerator)
+					print(denominator)
+					print(currentproplocked)
+
+					### Next condition
+					
+					} else { ### In this instance, the management units in outag are all neighbors
+					
+					cat('\nRemaining MU Options Are All Found In Neighbors\n',sep='')
+					
+					### Identify the MU's in tdata which are 'locked in'
+					
+					lockedunits = unique(tdata[,'MU'][which(tdata[,'status']==2)])
+
+					### A list of all MUs in 'outagorig' (original copy of outag before any changes were made)
+
+					outagmus = unique(outagorig$MU)
+
+					### Check if all unique 'outagmus' are found in 'lockedunits'
+
+					check = outagmus %in% lockedunits
+
+					### What are the unique logical values from 'check'
+
+					ucheck = unique(check)
+
+					### Logical test to determine if all MUs in 'outagorig' have already been locked in at same stage
+					### If so, we need to stop and break out of this loop and jump to the next PU of investigation (i.e., next 'inv')
+					### If we do not do this, the simulations will break because we will have no possible MU options left to lock in
+					### In other words, the whole planning unit has been converted and we need to MOVE ON
+
+					if(length(ucheck)==2){cat('Continue Locking in MUs As Normal For This Condition')} else if (length(ucheck)==1 & ucheck==F) {cat('Continue Locking in MUs As Normal For This Condition')} else {cat('Break Out Back To Top Level Of Investigate Loop');break}
+
+					### If we pass either of the first two logical tests in the 'if' statement above, proceed locking in MUs as normal
+					### Recreate outag, by removing only the lockedunits from outagorig
+					
+					outag = outagorig[-which(outagorig$MU %in% lockedunits),]
+					
+					### Print
+					
+					cat('\nOutAg With Locked MUs Removed\n',sep='')
+					print(outag)
+					
+					# Take 'highest value' MU (first row in 'outag' object); lock in by changing status to '2' in tdata
+
+					tdata[,'status'][tdata[,'MU']==(outag[1,1])] = 2
+					
+					### Progress
+					
+					cat('\nManagement Unit ',outag[1,1],' Locked In\n',sep='')
+
+					### Update newly locked in MU in 'objtable'
+
+					locktable = aggregate(tdata[,'area'], by=list(FU=tdata[,'FU'], status=tdata[,'status']),sum)
+					names(locktable)[3] = 'lockedarea'
+					
+					### Merge locktable and objtable by FU
+					
+					mergetable = merge(locktable,objtable,by='FU')
+					
+					### Update remaining objectives
+					
+					mergetable$remainobj = mergetable$remainobj - ((mergetable$lockedarea/mergetable$objarea)*mergetable$remainobj)
+
+					### Remove FU's from merge table where status is zero, only if they also have some area locked in
+					
+					out2 = NULL
+					
+					for (fu in unique(mergetable$FU))
+					
+						{
+						
+						### Subset
+						
+						tm = mergetable[which(mergetable$FU==fu),]
+						
+						if(nrow(tm)>1){tm = tm[which(tm$status==2),]}
+						
+						out2 = rbind(out2,tm)
+						
+						}
+						
+					objtable = out2
+					
+					### Print
+					
+					cat('\nObjTable After Updating MU Status\n',sep='')
+					print(objtable)
+					
+					### Calculate proportion of managment units locked in
+					### This should be done only for management units interesting PU inv
+					### However, we then calculate area for these MU's across all PU's
+					
+					### Start by subsetting tdata to only PU 'inv'
+					
+					ttdata = tdata[which(tdata[,'PU']==inv),]
+					
+					### Determine the Managment Units which interest PU 'inv'
+					
+					ttumus = unique(ttdata[,'MU'])
+					
+					### Subset tdata by only the management units in ttumus
+					
+					tttdata = tdata[which(tdata[,'MU'] %in% ttumus),]
+
+					### Now find the sum of the areas for these management units where status is 23
+					
+					numerator = sum(tttdata[,'area'][which(tttdata[,'status']==2)])
+					
+					denominator = putf$PUthresh[which(putf$PU==inv)]*2
+			
+					### Calculate the area that has been 'locked in'
+			
+					currentproplocked = (numerator/denominator)*100
+					
+					cat('\nNumerator,Denominator, and CPL\n',sep='')
+					print(numerator)
+					print(denominator)
+					print(currentproplocked)
+
+					} # End of else condition
+				
+				}
+				
+			### End of while loop here, i.e. target has been reached for the planning unit 'inv'
+
+			### Now calculate the area of all PU's which has been locked in as a result of locking in area for the planning unit 'inv'
+			
+			pulock = aggregate(tdata[,'area'][which(tdata[,'status']==2)],by=list(PU=tdata[,'PU'][which(tdata[,'status']==2)],status=tdata[,'status'][which(tdata[,'status']==2)]),FUN=sum)
+			names(pulock)[3] = 'lockedarea'
+			
+			cat('\n Area Locked For PUs\n',sep='')
+			print(pulock)
+			
+			### Next condition for the investigative unit 'inv'			
+			
+			} else if (invpos>1 & inv%in%pulock$PU) { # The investigative unit already has some area locked in
+
+			### Save image
+
+			save.image(paste(ii,'_',inv,'_Condition_3.Rdata',sep=''))
+			
+			### Report progress
+			
+			cat('\nInvestigating Planning Unit With Some Management Units Already Locked In\n',sep='')
+			
+			### Get the by locked area and threshold of each PU for the MU 'inv'
+			
+			tlockedarea = pulock$lockedarea[which(pulock$PU==inv)] # How much area is already locked in this PU?
+			tputhresh = putf$PUthresh[which(putf$PU==inv)]
+			
+			### Remove the fields status and locked area from objtable or they will mess up merging later
+			### HOWEVER, in this condition, we need to account for the possibility that we have previously broken out of the while loop as a result of locking in all MUs in the PU
+			### In which case, objtable at this point does NOT have the usual 7 columns (there was no last merge)
+			### We use an If test: only if length of number of columns of 'objtable' is 7, we remove columns 2 and 3, otherwise, nothing happens
+
+			### Clean objtable
+			
+			if(ncol(objtable)==7){objtable = objtable[,-c(2:3)]}
+
+			### Print
+			
+			cat('\nObjTable Before Locking In Units\n',sep='')
+			print(objtable)
+			
+			### First condition, less than 50% locked in
+			
+			if (tlockedarea<tputhresh) { # Less than 50% of the area of this investigative unit is locked in, proceed as normal
+			
+			### Save image
+
+			save.image(paste(ii,'_',inv,'_Condition_4.Rdata',sep=''))
+			
+			#### Report progress
+			
+			cat('\n Less Than Half Of The Planning Unit Has Been Locked In\n',sep='')
+			
+			### Subsetting to a single planning unit	
+		
+			puinvest = tdata[which(tdata[,'PU']==inv),]
+			
+			### Subset the combinations of MU and PU by this planning unit
+			
+			tmupu = mupus[which(mupus$PU==inv),]
+		
+			# Now want to summarise this by MU ID and FU ID and area
+		
+			puinvest = aggregate(puinvest[,'area'], by=list(FU=puinvest[,'FU'], MU=puinvest[,'MU'], PU=puinvest[,'PU']),sum) ########## DO WE NEED TO ALSO SUBSET BY STATUS BECAUSE NOW WE HAVE MUS LOCKED IN IN THIS CONDITION???? #########
+		
+			# Now to assess the conservation value of each intersecting MU
+			### To do this, use a loop
+		
+			### Identify unique MU's in 'puinvest'
+		
+			umus = unique(puinvest$MU)
+		
+			### Create a blank object for binding data to
+		
+			out = NULL
+		
+			for (umu in umus)
+		
+				{
+				
+				### Subset to only the management unit 'umu'
+				
+				tpu1 = puinvest[which(puinvest$MU==umu),]
+				
+				### Get the unique feature units from 'tpu1'
+				
+				ufus = unique(tpu1$FU)
+				
+				for (ufu in ufus)
+					
+					{
+					
+					### Subset to a single feature unit
+					
+					tobj = objtable[which(objtable$FU==ufu),]
+					
+					### Do some calculation
+					
+					value = tobj$remainobj * tobj$rarity
+					
+					### Bind this data into a dataframe
+					
+					tout = data.frame(MU=umu,FU=ufu,value=value)
+					
+					### Bind this data to 'out'
+					
+					out = rbind(out,tout)
+					
+					}
+				
+				}
+				
+			### Close loop
+	
+			### Aggregate out by summing all values within MU's
+			
+			outag = aggregate(out$value,by=list(MU=out$MU),FUN=sum)
+			
+			### Change a name
+			
+			names(outag)[2] = 'sumvalue'
+
+			### Reorder 'outag' by conservation value
+			
+			outag = outag[rev(order(outag$sumvalue)),]
+			
+			### Copy outag
+			
+			outagorig = outag
+
+			### Print
+			
+			cat('\nOutAg Before Locking In MUs\n',sep='')
+			print(outag)
+			
+			# Take 'highest value' MU (first row in 'outag' object); lock in by changing status to '2' in tdata
+
+			tdata[,'status'][tdata[,'MU']==(outag[1,1])] = 2
+			
+			### Progress
+			
+			cat('\nManagement Unit ',outag[1,1],' Locked In\n',sep='')
+			
+			### Update newly locked in MU in 'objtable'
+
+			locktable = aggregate(tdata[,'area'], by=list(FU=tdata[,'FU'], status=tdata[,'status']),sum)
+			names(locktable)[3] = 'lockedarea'
+			
+			### Merge locktable and objtable by FU
+			
+			mergetable = merge(locktable,objtable,by='FU')
+			
+			### Update remaining objectives
+			
+			mergetable$remainobj = mergetable$remainobj - ((mergetable$lockedarea/mergetable$objarea)*mergetable$remainobj)
+
+			###  Update objtable
+			### Remove FU's from merge table where status is zero, only if they also have some area locked in
+			
+			out2 = NULL
+			
+			for (fu in unique(mergetable$FU))
+			
+				{
+				
+				### Subset
+				
+				tm = mergetable[which(mergetable$FU==fu),]
+				
+				if(nrow(tm)>1){tm = tm[which(tm$status==2),]}
+				
+				out2 = rbind(out2,tm)
+				
+				}
+				
+			objtable = out2
+			
+			### Print
+			
+			cat('\nObjTable After Updating MU Status\n',sep='')
+			print(objtable)
+			
+			### Calculate proportion of managment units locked in
+			### This should be done only for management units interesting PU inv
+			### However, we then calculate area for these MU's across all PU's
+			
+			### Start by subsetting tdata to only PU 'inv'
+			
+			ttdata = tdata[which(tdata[,'PU']==inv),]
+			
+			### Determine the Managment Units which interest PU 'inv'
+			
+			ttumus = unique(ttdata[,'MU'])
+			
+			### Subset tdata by only the management units in ttumus
+			
+			tttdata = tdata[which(tdata[,'MU'] %in% ttumus),]
+
+			### Now find the sum of the areas for these management units where status is 23
+			
+			numerator = sum(tttdata[,'area'][which(tttdata[,'status']==2)])
+			
+			denominator = putf$PUthresh[which(putf$PU==inv)]*2
+			
+			### Calculate the area that has been 'locked in'
+			
+			currentproplocked = (numerator/denominator)*100
+			
+			### Print
+			
+			cat('\nNumerator,Denominator, and CPL\n',sep='')
+			print(numerator)
+			print(denominator)
+			print(currentproplocked)
+			
+			### Iterate until target is met
+			
+			while(currentproplocked<target)
+			
+				{
+				
+				### Clean objtable
+				
+				objtable = objtable[,-c(2,3)]
+				
+				### Print
+				
+				cat('\nObjTable Before Locking In Further MUs\n',sep='')
+				print(objtable)
+				
+				### Identify the management unit with the highest value
+
+				muhv = outag$MU[1]
+
+				### Print
+				
+				cat('\nHighest Value Management Unit\n',sep='')
+				print(muhv)
+
+				### Find all the management units which neighbor MUHV
+				# Use this search function to search the original mubound file for those neighbouring MUHV
+
+				sfun = function(MUID1,muhv){muhv %in% MUID1}
+
+				# Logically tests the search function on every row in mubound
+
+				mpos = apply(cbind(mubound),1,sfun,muhv)
+
+				# The MUs which neighbour muhv
+
+				neighbors = unique(c(mubound$MUID1[which(mpos==TRUE)], mubound$MUID2[which(mpos==TRUE)]))
+
+				### Print
+				
+				cat('\nAll Neighbors of MUHV\n',sep='')
+				print(neighbors)
+			
+				### First condition for MUHV
+				
+				if(length(unique(outag$MU %in% neighbors))==2)
+				
+					{
+					
+					cat('\nNot All MUs in Outag Are Neighbors of MUHV\n',sep='')
+				
+					### Eliminate neighbors from outag
+					
+					outag = outag[-which(outag$MU %in% neighbors),]
+					
+					### Print
+					
+					cat('\nOutAg After Removing Neighbors\n',sep='')
+					print(outag)
+					
+					# Take 'highest value' MU (first row in 'outag' object); lock in by changing status to '2' in tdata
+
+					tdata[,'status'][tdata[,'MU']==(outag[1,1])] = 2
+					
+					### Progress
+					
+					cat('\nManagement Unit ',outag[1,1],' Locked In\n',sep='')
+
+					### Update newly locked in MU in 'objtable'
+
+					locktable = aggregate(tdata[,'area'], by=list(FU=tdata[,'FU'], status=tdata[,'status']),sum)
+					names(locktable)[3] = 'lockedarea'
+					
+					### Merge locktable and objtable by FU
+					
+					mergetable = merge(locktable,objtable,by='FU')
+					
+					### Update remaining objectives
+					
+					mergetable$remainobj = mergetable$remainobj - ((mergetable$lockedarea/mergetable$objarea)*mergetable$remainobj)
+
+					### Update objtable
+					### Remove FU's from merge table where status is zero, only if they also have some area locked in
+					
+					out2 = NULL
+					
+					for (fu in unique(mergetable$FU))
+					
+						{
+						
+						### Subset
+						
+						tm = mergetable[which(mergetable$FU==fu),]
+						
+						if(nrow(tm)>1){tm = tm[which(tm$status==2),]}
+						
+						out2 = rbind(out2,tm)
+						
+						}
+						
+					objtable = out2
+					
+					### Print
+					
+					cat('\nObjTable After Updating MU Status\n',sep='')
+					print(objtable)
+					
+					### Calculate proportion of managment units locked in
+					### This should be done only for management units interesting PU inv
+					### However, we then calculate area for these MU's across all PU's
+					
+					### Start by subsetting tdata to only PU 'inv'
+					
+					ttdata = tdata[which(tdata[,'PU']==inv),]
+					
+					### Determine the Managment Units which interest PU 'inv'
+					
+					ttumus = unique(ttdata[,'MU'])
+					
+					### Subset tdata by only the management units in ttumus
+					
+					tttdata = tdata[which(tdata[,'MU'] %in% ttumus),]
+
+					### Now find the sum of the areas for these management units where status is 23
+					
+					numerator = sum(tttdata[,'area'][which(tttdata[,'status']==2)])
+					
+					denominator = putf$PUthresh[which(putf$PU==inv)]*2
+			
+					### Calculate the area that has been 'locked in'
+			
+					currentproplocked = (numerator/denominator)*100
+					
+					### Print
+					
+					cat('\nNumerator,Denominator, and CPL\n',sep='')
+					print(numerator)
+					print(denominator)
+					print(currentproplocked)
+
+					} else { ### In this instance, the management units in outag are all neighbors
+					
+					cat('\nRemaining MU Options Are All Found In Neighbors\n',sep='')
+					
+					### Identify the MU's in tdata which are 'locked in'
+					
+					lockedunits = unique(tdata[,'MU'][which(tdata[,'status']==2)])
+
+					### A list of all MUs in 'outagorig' (original copy of outag before any changes were made)
+
+					outagmus = unique(outagorig$MU)
+
+					### Check if all unique 'outagmus' are found in 'lockedunits'
+
+					check = outagmus %in% lockedunits
+
+					### What are the unique logical values from 'check'
+
+					ucheck = unique(check)
+
+					### Logical test to determine if all MUs in 'outagorig' have already been locked in at same stage
+					### If so, we need to stop and break out of this loop and jump to the next PU of investigation (i.e., next 'inv')
+					### If we do not do this, the simulations will break because we will have no possible MU options left to lock in
+					### In other words, the whole planning unit has been converted and we need to MOVE ON
+
+					if(length(ucheck)==2){cat('Continue Locking in MUs As Normal For This Condition')} else if (length(ucheck)==1 & ucheck==F) {cat('Continue Locking in MUs As Normal For This Condition')} else {cat('Break Out Back To Top Level Of Investigate Loop');break}
+
+					### If we pass either of the first two logical tests in the 'if' statement above, proceed locking in MUs as normal
+					### Recreate outag, by removing only the lockedunits from outagorig
+					
+					outag = outagorig[-which(outagorig$MU %in% lockedunits),]
+					
+					### Print
+					
+					cat('\nOutAg After Removing Locked Units\n',sep='')
+					print(outag)
+					
+					# Take 'highest value' MU (first row in 'outag' object); lock in by changing status to '2' in tdata
+
+					tdata[,'status'][tdata[,'MU']==(outag[1,1])] = 2
+					
+					### Progress
+					
+					cat('\nManagement Unit ',outag[1,1],' Locked In\n',sep='')
+
+					### Update newly locked in MU in 'objtable'
+
+					locktable = aggregate(tdata[,'area'], by=list(FU=tdata[,'FU'], status=tdata[,'status']),sum)
+					names(locktable)[3] = 'lockedarea'
+					
+					### Merge locktable and objtable by FU
+					
+					mergetable = merge(locktable,objtable,by='FU')
+					
+					### Update remaining objectives
+					
+					mergetable$remainobj = mergetable$remainobj - ((mergetable$lockedarea/mergetable$objarea)*mergetable$remainobj)
+
+					### Update objtable
+					### Remove FU's from merge table where status is zero, only if they also have some area locked in
+					
+					out2 = NULL
+					
+					for (fu in unique(mergetable$FU))
+					
+						{
+						
+						### Subset
+						
+						tm = mergetable[which(mergetable$FU==fu),]
+						
+						if(nrow(tm)>1){tm = tm[which(tm$status==2),]}
+						
+						out2 = rbind(out2,tm)
+						
+						}
+						
+					objtable = out2
+					
+					### Print
+					
+					cat('\nObjTable After Updating MU Status\n',sep='')
+					print(objtable)
+					
+					### Calculate proportion of managment units locked in
+					### This should be done only for management units interesting PU inv
+					### However, we then calculate area for these MU's across all PU's
+					
+					### Start by subsetting tdata to only PU 'inv'
+					
+					ttdata = tdata[which(tdata[,'PU']==inv),]
+					
+					### Determine the Managment Units which interest PU 'inv'
+					
+					ttumus = unique(ttdata[,'MU'])
+					
+					### Subset tdata by only the management units in ttumus
+					
+					tttdata = tdata[which(tdata[,'MU'] %in% ttumus),]
+
+					### Now find the sum of the areas for these management units where status is 23
+					
+					numerator = sum(tttdata[,'area'][which(tttdata[,'status']==2)])
+					
+					denominator = putf$PUthresh[which(putf$PU==inv)]*2
+			
+					### Calculate the area that has been 'locked in'
+			
+					currentproplocked = (numerator/denominator)*100
+					
+					### Print
+					
+					cat('\nNumerator,Denominator, and CPL\n',sep='')
+					print(numerator)
+					print(denominator)
+					print(currentproplocked)
+					
+					} # End of else condition
+				
+				}
+				
+			### End of while loop here, i.e. target has been reached for the planning unit 'inv'
+		
+			### Now calculate the area of all PU's which has been locked in as a result of locking in area for the planning unit 'inv'
+			
+			pulock = aggregate(tdata[,'area'][which(tdata[,'status']==2)],by=list(PU=tdata[,'PU'][which(tdata[,'status']==2)],status=tdata[,'status'][which(tdata[,'status']==2)]),FUN=sum)
+			names(pulock)[3] = 'lockedarea'
+			
+			### Print
+			
+			cat('\n Area Locked For PUs\n',sep='')
+			print(pulock)
+			
+			} else { # More than 50% of this planning unit has been 'locked in'
+
+			### Save image
+
+			save.image(paste(ii,'_',inv,'_Condition_5.Rdata',sep=''))
+			
+			### Report progress
+			
+			cat('\nMore Than 50% Of This Planning Unit Is Locked In\n',sep='')
+			
+			### Identify the PU's which neighbor 'inv'
+			# Use this search function to search the original mubound file for those neighbouring MUHV
+
+			sfun2 = function(PUID1,inv){inv %in% PUID1}
+
+			# Logically tests the search function on every row in mubound
+
+			ppos = apply(cbind(pubound),1,sfun2,inv)
+
+			# The MUs which neighbour muhv
+
+			pneighbors = unique(c(pubound$PUID1[which(ppos==TRUE)], pubound$PUID2[which(ppos==TRUE)]))
+			
+			### Remove 'inv' from neighbors list
+			
+			pneighbors = pneighbors[-which(pneighbors==inv)]
+			
+			### Print
+			
+			cat('\nNeighboring Planning Units\n',sep='')
+			print(pneighbors)
+			
+			### Randomly select a neighboring planning unit to merge with 'inv'
+			
+			NPUID = pneighbors[sample(1:length(pneighbors),1,replace=F)]
+			
+			### Print
+			
+			cat('\nUpdating PU ',inv,' To ',NPUID,'\n',sep='')
+			
+			### Update the Planning Unit 'inv' to NPUID in the table tdata
+			
+			tdata[,'PU'][which(tdata[,'PU']==inv)]=NPUID
+			
+			### Now recalculate the locked in area for all planning units
+			
+			pulock = aggregate(tdata[,'area'][which(tdata[,'status']==2)],by=list(PU=tdata[,'PU'][which(tdata[,'status']==2)],status=tdata[,'status'][which(tdata[,'status']==2)]),FUN=sum)
+			names(pulock)[3] = 'lockedarea'
+			
+			### Print
+			
+			cat('\n Area Locked For PUs\n',sep='')
+			print(pulock)
+			
+			### Create a table of thresholds based on planning unit size
+
+			putf = aggregate(tdata[,'area'],by=list(PU=tdata[,'PU']), FUN=sum)
+			names(putf)[2] = 'PUthresh'
+			putf$PUthresh = putf$PUthresh/2	
+
+			### Adjust the neighbors table 'pubound', by updated planning unit 'inv' to NPUID
+			
+			pubound$PUID1[which(pubound$PUID1==inv)] = NPUID
+			pubound$PUID2[which(pubound$PUID1==inv)] = NPUID
+			
+			### Adjust the table 'mupus', unique  by updated planning unit 'inv' to NPUID
+			
+			mupus$PU[which(mupus$PU==inv)] = NPUID
+		
 			}
 			
-			# Finished investigating all planning units in one iteration
+			} 
 			
-	### Adjust the planning unit ID's of units in tdata which are locked in
+		### Print
+			
+		cat('\nFinished Investigating Planning Unit ',inv,'\n',sep='')
+		
+		}
+		
+	### Save a copy of objtable with the iteration number
+	
+	save(objtable,list=c(objtable='objtable'),file=paste('Objtable_Iteration_',ii,'.Rdata',sep=''))
+
+	# Finished investigating all planning units in one iteration
+	### Update key tables and do conditional operations for final iteration
+		
+	### Adjust the PU ID's of units in tdata which are locked in
+	### Must be done to properly iterate
+	### Jess search here, need to adjust 3000 when number of PUs increases
 
 	tdata[,'PU'][which(tdata[,'status']==2)] = as.numeric(tdata[,'PU'][which(tdata[,'status']==2)])+3000
+	
+	### If all objectives are met, produce ASCII maps of PU, MU, and FU from tdata
+	
+	if(sum(objtable$remainobj<=0)) {
+	
+	### Populate the blank ASCII with Planning Unit values
+	
+	baseasc[cbind(pos$row,pos$col)] = tdata[,'PU']
+	
+	### Write the ASCII out
+	
+	write.asc(baseasc,file='PU_Updated.asc')
+	
+	### Resest the base ASCII
+	
+	baseasc[,] = NA
+	
+	### Populate the blank ASCII with Status values
+	
+	baseasc[cbind(pos$row,pos$col)] = tdata[,'status']
+	
+	### Write the ASCII out
+	
+	write.asc(baseasc,file='Status_Updated.asc')
+	
+	}
 			
-	### Create the input files
+	### Create the input files for the next Marxan Iteration
 		
 	write.inputs(id)
 	twrite2(create.input.dat(od,id,ii),paste('input',sprintf('%03i',ii),'.dat',sep=''))
@@ -1730,11 +1854,7 @@ pu2i = seq(1:2000)
 	
 	cat('\nStarting Marxan Iteration ',ii,'\n',sep='')
 	
-	if(ii==2){save.image('All2.Rdata')}
-	#if(ii==3){save.image('All3.Rdata')}
-	if(ii==4){save.image('All4.Rdata')}
-	
-	### Run Marxan
+	### Run Marxan again
 	
 	system(command=paste('./MarOpt_v243_Linux64 input',sprintf('%03i',ii),'.dat -s ',sep=''))
 	
@@ -1743,7 +1863,7 @@ pu2i = seq(1:2000)
 	ii = ii + 1
 	
 	}
-	
+
 cat('\nFinished Simulation\n',sep='')
 
 ### Simulation complete
